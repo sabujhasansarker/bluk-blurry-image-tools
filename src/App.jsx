@@ -7,10 +7,14 @@ import Header from "./components/Header";
 import ImageGrid from "./components/ImageGrid";
 import UploadZone from "./components/UploadZone";
 import { processImage } from "./utils/imageProcessor";
+import { compressImage } from "./utils/optimizer";
 
 function App() {
   const [images, setImages] = useState([]);
-  const [blurAmount, setBlurAmount] = useState(10);
+  const [blurAmount, setBlurAmount] = useState(0);
+  const [format, setFormat] = useState("original");
+  const [quality, setQuality] = useState(0.9);
+  const [smartCompress, setSmartCompress] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleUpload = useCallback((files) => {
@@ -32,10 +36,58 @@ function App() {
     });
   }, []);
 
+  const getOutputFormat = (selectedFormat, originalFile) => {
+    if (selectedFormat === "original") {
+      return originalFile.type;
+    }
+    return selectedFormat;
+  };
+
+  const getOutputExtension = (selectedFormat, originalFile) => {
+    if (selectedFormat === "original") {
+      const ext = originalFile.name.split(".").pop();
+      return `.${ext}`;
+    }
+    switch (selectedFormat) {
+      case "image/jpeg":
+        return ".jpg";
+      case "image/png":
+        return ".png";
+      case "image/webp":
+        return ".webp";
+      case "image/avif":
+        return ".avif";
+      default:
+        return ".png";
+    }
+  };
+
   const handleDownloadSingle = async (image) => {
     try {
-      const blob = await processImage(image.preview, blurAmount);
-      saveAs(blob, `${image.file.name}`);
+      const outputFormat = getOutputFormat(format, image.file);
+      // If smart compress is on, use high quality for initial canvas export, then let optimizer handle it
+      // Note: Smart Compress is disabled for AVIF
+      const initialQuality =
+        smartCompress && format !== "image/avif" ? 1.0 : quality;
+
+      let blob = await processImage(
+        image.preview,
+        blurAmount,
+        outputFormat,
+        initialQuality
+      );
+
+      if (smartCompress && format !== "image/avif") {
+        // Convert blob to file for optimizer
+        const file = new File([blob], "image", { type: outputFormat });
+        blob = await compressImage(file);
+      }
+
+      const ext = getOutputExtension(format, image.file);
+      const filename =
+        image.file.name.substring(0, image.file.name.lastIndexOf(".")) + ext;
+
+      saveAs(blob, filename);
     } catch (error) {
       console.error("Failed to process image:", error);
       alert("Failed to process image. Please try again.");
@@ -49,14 +101,33 @@ function App() {
     try {
       const zip = new JSZip();
       const promises = images.map(async (image) => {
-        const blob = await processImage(image.preview, blurAmount);
-        zip.file(`${image.file.name}`, blob);
+        const outputFormat = getOutputFormat(format, image.file);
+        const initialQuality =
+          smartCompress && format !== "image/avif" ? 1.0 : quality;
+
+        let blob = await processImage(
+          image.preview,
+          blurAmount,
+          outputFormat,
+          initialQuality
+        );
+
+        if (smartCompress && format !== "image/avif") {
+          const file = new File([blob], "image", { type: outputFormat });
+          blob = await compressImage(file);
+        }
+
+        const ext = getOutputExtension(format, image.file);
+        const filename =
+          image.file.name.substring(0, image.file.name.lastIndexOf(".")) + ext;
+
+        zip.file(filename, blob);
       });
 
       await Promise.all(promises);
 
       const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, "blurred-images.zip");
+      saveAs(content, "processed-images.zip");
     } catch (error) {
       console.error("Failed to process images:", error);
       alert("Failed to process images. Please try again.");
@@ -114,6 +185,12 @@ function App() {
             <ControlPanel
               blurAmount={blurAmount}
               setBlurAmount={setBlurAmount}
+              format={format}
+              setFormat={setFormat}
+              quality={quality}
+              setQuality={setQuality}
+              smartCompress={smartCompress}
+              setSmartCompress={setSmartCompress}
               onDownloadAll={handleDownloadAll}
               hasImages={images.length > 0}
               isProcessing={isProcessing}
